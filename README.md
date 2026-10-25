@@ -8,6 +8,8 @@ An agent skill for making product videos as code: canvas visuals and Web Audio s
 MP4 with [Remotion](https://www.remotion.dev), in a style picked from
 [Futurepedia AI Style Atlas](https://www.futurepedia.io/resources/ai-style-atlas/view).
 
+https://github.com/user-attachments/assets/bc4688bd-7462-4f4b-93bf-dfa9f48d5dde
+
 No video editor: every frame is a pure function of time, all sound is synthesized, and the video
 lives in git, so you can review it in a PR and re-render it any time.
 
