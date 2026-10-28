@@ -87,6 +87,8 @@ Render stills with `bun run stills <id> 0 <one time per beat> <last>` and look a
 - [ ] Every number is real or marked illustrative.
 - [ ] With a voiceover: `bun run voiceover <id>` exits 0 (no beat overruns), it used the voice the
       storyboard named, and `public/<id>-voice.mp3` is no longer than the video.
+- [ ] Mix mode: a video with `voice` renders its score with `{ voiceover: true }` (ducked under
+      the narration), one without renders with `{}`. Say which mode was used.
 - [ ] Every sound the score asks for is supported by the sound kit in `src/lib/`; unsupported
       options are silently ignored, so listen to the WAV.
 

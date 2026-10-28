@@ -226,7 +226,8 @@ import { VIDEOS } from "./videos"
 
 const renderScore = async (id: string) => {
   const video = VIDEOS[id]!
-  const r = await window.SOUND.renderOffline(video.score, video.duration, SAMPLE_RATE, {})
+  // With narration, voiceover mode ducks the score under the voice.
+  const r = await window.SOUND.renderOffline(video.score, video.duration, SAMPLE_RATE, { voiceover: !!video.voice })
   const norm = r.peak > 0.98 ? 0.98 / r.peak : 1
   const pcm = new Int16Array(r.inter.length)
   for (let i = 0; i < pcm.length; i++) pcm[i] = Math.max(-1, Math.min(1, r.inter[i]! * norm)) * 32767
@@ -305,8 +306,14 @@ if (!id) throw new Error("Usage: bun run render <id>")
 
 const root = join(import.meta.dir, "..")
 const entryPoint = join(root, "src/index.ts")
+// A pen-heavy score can take longer than the default 28 s to render offline.
+const timeoutInMilliseconds = 10 * 60 * 1000
 
-const audio = await selectComposition({ serveUrl: await bundle({ entryPoint }), id: `${id}-audio` })
+const audio = await selectComposition({
+  serveUrl: await bundle({ entryPoint }),
+  id: `${id}-audio`,
+  timeoutInMilliseconds,
+})
 const { pcm, sampleRate } = audio.props as { pcm: string; sampleRate: number }
 const data = Buffer.from(pcm, "base64")
 const header = Buffer.alloc(44)
@@ -330,10 +337,10 @@ if (process.argv.includes("--audio")) {
 
 // Bundle again so the new WAV is in the served public folder.
 const serveUrl = await bundle({ entryPoint })
-const composition = await selectComposition({ serveUrl, id })
+const composition = await selectComposition({ serveUrl, id, timeoutInMilliseconds })
 mkdirSync(join(root, "out"), { recursive: true })
 const outputLocation = join(root, `out/${id}.mp4`)
-await renderMedia({ serveUrl, composition, codec: "h264", outputLocation })
+await renderMedia({ serveUrl, composition, codec: "h264", outputLocation, timeoutInMilliseconds })
 console.log(`Wrote public/${id}.wav and ${outputLocation}`)
 ```
 
@@ -355,11 +362,12 @@ if (!id || times.length === 0) throw new Error("Usage: bun run stills <id> <t1> 
 
 const root = join(import.meta.dir, "..")
 const inputProps = { id, withAudio: false }
+const timeoutInMilliseconds = 10 * 60 * 1000 // the default 28 s is too short for heavy scenes
 const serveUrl = await bundle({ entryPoint: join(root, "src/index.ts") })
-const composition = await selectComposition({ serveUrl, id, inputProps })
+const composition = await selectComposition({ serveUrl, id, inputProps, timeoutInMilliseconds })
 for (const t of times) {
   const frame = Math.min(composition.durationInFrames - 1, Math.round(Number(t) * composition.fps))
-  await renderStill({ serveUrl, composition, frame, output: join(root, `out/${id}-${t}.png`), inputProps })
+  await renderStill({ serveUrl, composition, frame, output: join(root, `out/${id}-${t}.png`), inputProps, timeoutInMilliseconds })
   console.log(`out/${id}-${t}.png`)
 }
 ```
@@ -511,13 +519,18 @@ async function edgeClip(text: string, out: string) {
       await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3)
       const { audioStream } = tts.toStream(text, spec.rate ? { rate: spec.rate } : undefined)
       const file = createWriteStream(out)
+      // msedge-tts 2.1.0 raises "Expected 101 status code" from a WebSocket error event that
+      // no stream listener sees, so catch it as an uncaught exception while the clip is pending.
       await new Promise<void>((resolve, reject) => {
+        process.once("uncaughtException", reject)
         audioStream.pipe(file)
         file.on("finish", () => resolve())
         file.on("error", reject)
         audioStream.on("error", reject)
+      }).finally(() => {
+        process.removeAllListeners("uncaughtException")
+        tts.close?.()
       })
-      tts.close?.()
       if (probe(out) > 0.5) return
       throw new Error("empty clip")
     } catch (err) {
@@ -545,7 +558,15 @@ let overruns = 0
 for (const [i, beat] of spec.beats.entries()) {
   const file = join(workDir, `beat-${String(i + 1).padStart(2, "0")}.mp3`)
   if (engine === "elevenlabs") await elevenClip(beat.text, file)
-  else await edgeClip(beat.text, file)
+  else {
+    try {
+      await edgeClip(beat.text, file)
+    } catch (err) {
+      console.error(`[voiceover] Edge TTS failed on beat ${i + 1} after 4 attempts: ${err instanceof Error ? err.message : err}`)
+      console.error("[voiceover] Edge TTS may be refusing the connection. Retry later, or set ELEVENLABS_API_KEY.")
+      process.exit(1)
+    }
+  }
   const len = probe(file)
   const slotEnd = (spec.beats[i + 1]?.start ?? spec.duration) - gap
   const slot = slotEnd - beat.start
