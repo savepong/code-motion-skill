@@ -2,6 +2,7 @@
 import "../lib/harness.js"
 import "../lib/sound.js"
 import "../style/manga.js"
+import "./tutorial/timing.js"
 import "./tutorial/visuals.js"
 import "./tutorial/score.js"
 import "./tutorial/vertical.js"
@@ -19,6 +20,7 @@ declare global {
       renderOffline: (score: unknown, duration: number, sampleRate: number, opts: object) => Promise<OfflineResult>
     }
     LOGO: HTMLImageElement | null
+    TIMING: Record<string, unknown>
   }
 }
 

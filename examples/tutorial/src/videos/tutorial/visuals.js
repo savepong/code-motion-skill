@@ -3,9 +3,8 @@
 ;(function () {
   const { TAU, poly, catmull, brush, bz, focusLines, KANA, kanaStrokes, sfx, bubble, tone, gradTone, inkLoop, rrPts, ellPts, pencilRough, paper, robot, narr, mArrow } = window.MANGA;
   // ===== TUTORIAL: how to install and use the /code-motion skill =====
-  const DURATION = 34;
-  const COVER = 1.5; // the takeaway page doubles as the cover: held 1 s, then a page turn into the story
-  const SHIFT = 4.5; // pages 3-4 run 4.5 s later than first storyboarded, to make room for the Studio page
+  // Page start times, page turns and the total length come from the shared table in timing.js.
+  const { T: PG, duration: DURATION } = window.TIMING.tutorial;
   const THAI = /[฀-๿]/;
   // Thai has no glyphs in the style's Latin fonts: Mali stands in for Patrick Hand, Kanit for Archivo Black.
   const F = (size, s) => (THAI.test(s) ? `700 ${size}px "Mali"` : `400 ${size}px "Patrick Hand"`);
@@ -347,10 +346,11 @@
       }
     };
     const P4 = V ? page4V : page4;
-    const cover = (c) => { tq = 28; P4(c, 28); };
+    // the takeaway page doubles as the cover, drawn finished
+    const cover = (c) => { tq = PG.page4.to; P4(c, PG.page4.to); };
     cover.native = P4.native;
-    const C = COVER, S2 = SHIFT + COVER;
-    const PAGES = [[cover, 0, 1.0, 0], [page1, 1.5, 6.4 + C, C], [page2, 6.9 + C, 14.6 + C, C], [pageS, 15.1 + C, 19.1 + C, C], [page3, 19.6 + C, 27.1 + C, S2], [P4, 27.6 + C, DURATION, S2]];
+    // [draw, absolute start, absolute end, local-to-absolute offset]
+    const PAGES = [[cover, PG.cover], [page1, PG.page1], [page2, PG.page2], [pageS, PG.studio], [page3, PG.page3], [P4, PG.page4]].map(([fn, p]) => [fn, p.start, p.end, p.offset]);
     for (let i = 0; i < PAGES.length; i++) {
       const [fn, , end] = PAGES[i], next = PAGES[i + 1];
       if (t < end || !next) { ctx.drawImage(drawPage(fn, t, PAGES[i][3]), 0, 0); break; }
