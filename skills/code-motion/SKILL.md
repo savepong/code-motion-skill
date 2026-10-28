@@ -33,7 +33,8 @@ Only if there is no video app yet. Ask where it should live (default `apps/video
 1. **Brief.** Get topic and audience, language, length (default 20–30 s), aspect ratio (16:9,
    9:16 or both; see REFERENCE.md), frame rate (30 by default, 60 for smoother motion), brand
    assets (logo file if any, fonts, colours), and whether they want voiceover narration (free
-   Edge TTS by default, ElevenLabs if `ELEVENLABS_API_KEY` is set) on top of the synthesized
+   Edge TTS first; if Edge fails and `ELEVENLABS_API_KEY` is set in `.env`, ElevenLabs for every
+   beat) on top of the synthesized
    sound, and if so the voice style (gender, accent, tone). Pick the voice and ElevenLabs model
    from the tables in REFERENCE.md. Ask once, in a single question, for whatever is missing.
 2. **Style prompt.** Ask the user to pick a style on

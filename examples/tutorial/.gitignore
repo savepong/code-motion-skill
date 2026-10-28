@@ -6,3 +6,5 @@ public/*.mp3
 prompts/
 src/lib/
 src/style/
+.env
+.env.*
