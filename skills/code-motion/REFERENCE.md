@@ -78,7 +78,12 @@ out/
 public/*.wav
 public/*.mp3
 node_modules/
+.env
+.env.*
 ```
+
+`.env` holds `ELEVENLABS_API_KEY` for narration (see Voiceover narration below). Keep both `.env`
+lines even in a video with no voiceover, so a key added later is never committed.
 
 Some repos also gitignore `src/lib/` and `src/style/` (third-party style files copied from the
 prompt, as in `examples/tutorial`). Then a fresh clone cannot build until someone copies them in
@@ -576,7 +581,8 @@ which allows this).
 ## Voiceover narration (optional)
 
 Spoken narration is generated once into `public/<id>-voice.mp3` and played over the score.
-Edge TTS (free, no key) is the default; if `ELEVENLABS_API_KEY` is set, ElevenLabs is used instead.
+Edge TTS (free, no key) is tried first. If Edge fails (it has refused connections from
+`msedge-tts` 2.1.0) and `ELEVENLABS_API_KEY` is set, the script redoes every beat with ElevenLabs.
 Needs `ffmpeg` and `ffprobe` on the PATH.
 
 Generate **one clip per beat** and place each at its beat's start time. One long clip for the whole
@@ -602,8 +608,10 @@ video drifts out of sync with the scenes, and if it is longer than the video the
    - `rate`: Edge speaking rate (`"+10%"`, `"-5%"`). Prefer shortening text over going above +15%.
    - `gap`: seconds of silence required before the next beat starts.
    - `start`: a little after the scene cut (about 0.4–0.6 s) so the picture lands first.
-   - `elevenlabs` (optional): used only when `ELEVENLABS_API_KEY` is set. `voice` is a voice ID
-     from your ElevenLabs library; `model` defaults to `eleven_multilingual_v2`.
+   - `elevenlabs` (optional): the fallback voice, used only when `ELEVENLABS_API_KEY` is set and
+     Edge fails, or with `--engine elevenlabs`. `voice` is a voice ID; `model` defaults to
+     `eleven_multilingual_v2`. Fill it in whenever the key is set, so a fallback uses a voice
+     the storyboard named.
    - Budget: English Edge voices speak about 2.1–2.5 words per second at `+0%`, so a 10 s beat
      holds about 20 words. Thai runs at roughly 4–5 syllables per second. Check with a test run.
 2. Run `bun run voiceover <id>`. It prints where each clip ends and exits with code 2 if any clip
@@ -631,6 +639,18 @@ ElevenLabs models for this offline, per-beat generation:
 | `eleven_v3`              | Most expressive delivery, and needed for Thai and other languages v2 lacks. Check each clip: it varies more between runs. |
 | `eleven_flash_v2_5`      | Not needed here; its advantage is low latency for real-time use.           |
 
+ElevenLabs limits:
+
+- **Library voices need a paid plan.** On the free plan the API returns 402
+  `paid_plan_required` for a voice added from the Voice Library. Premade voices (the default
+  voices every account has) work on the free plan.
+- **Thai needs `eleven_v3`.** Its clip lengths change between runs, so a re-run can overrun a beat
+  slot that fit before. Run `bun run voiceover <id>` again after any re-generation and check the
+  slot report, and leave Thai beats some slack.
+- **Keep the key in `.env`.** Put `ELEVENLABS_API_KEY=...` in `.env` at the video app's root; Bun
+  loads it by itself, so no `dotenv` is needed. The shell's `.gitignore` ignores `.env` and
+  `.env.*`. Never print, log, or commit the key, and never paste it into `narration.json`.
+
 ### scripts/voiceover.ts
 
 ```ts
@@ -640,10 +660,11 @@ ElevenLabs models for this offline, per-beat generation:
 // Reads src/videos/<id>/narration.json:
 //   { voice, rate?, gap?, duration, beats: [{ start, text }], elevenlabs?: { voice, model? } }
 //
-// Uses Edge TTS (free, no key) with `voice` (an Edge voice name such as "th-TH-PremwadeeNeural").
-// If ELEVENLABS_API_KEY is set, uses ElevenLabs instead with `elevenlabs.voice` (a voice ID) and
-// `elevenlabs.model` (default eleven_multilingual_v2; use eleven_v3 for Thai and other languages
-// multilingual_v2 does not cover). Flags override the file: --engine edge|elevenlabs, --voice, --model.
+// Tries Edge TTS first (free, no key) with `voice` (an Edge voice name such as "th-TH-PremwadeeNeural").
+// If Edge fails and ELEVENLABS_API_KEY is set, it regenerates every beat with ElevenLabs, so the
+// video keeps one voice, using `elevenlabs.voice` (a voice ID) and `elevenlabs.model` (default
+// eleven_multilingual_v2; use eleven_v3 for Thai and other languages multilingual_v2 does not cover).
+// Flags override the file: --engine edge|elevenlabs (one engine, no fallback), --voice, --model.
 import { execFileSync } from "node:child_process"
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -673,11 +694,14 @@ const spec = JSON.parse(readFileSync(specPath, "utf8")) as {
 }
 const gap = spec.gap ?? 0.4
 
-const engine = getArg("--engine") ?? (process.env.ELEVENLABS_API_KEY ? "elevenlabs" : "edge")
-if (engine === "elevenlabs" && !process.env.ELEVENLABS_API_KEY) throw new Error("ELEVENLABS_API_KEY is not set")
-const voice =
-  getArg("--voice") ??
-  (engine === "elevenlabs" ? spec.elevenlabs?.voice ?? "21m00Tcm4TlvDq8ikWAM" : spec.voice ?? "en-US-AriaNeural")
+const forced = getArg("--engine")
+const hasKey = Boolean(process.env.ELEVENLABS_API_KEY)
+if (forced === "elevenlabs" && !hasKey) throw new Error("ELEVENLABS_API_KEY is not set")
+let engine = forced ?? "edge"
+// --voice names a voice for the first engine only; a fallback uses the file's elevenlabs.voice.
+const voiceFor = (e: string, flag?: string) =>
+  flag ?? (e === "elevenlabs" ? spec.elevenlabs?.voice ?? "21m00Tcm4TlvDq8ikWAM" : spec.voice ?? "en-US-AriaNeural")
+let voice = voiceFor(engine, getArg("--voice"))
 const model = getArg("--model") ?? spec.elevenlabs?.model ?? "eleven_multilingual_v2"
 const workDir = join(root, `out/voice-${id}`)
 mkdirSync(workDir, { recursive: true })
@@ -722,33 +746,56 @@ async function elevenClip(text: string, out: string) {
     headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY!, "Content-Type": "application/json", Accept: "audio/mpeg" },
     body: JSON.stringify({ text, model_id: model, voice_settings }),
   })
+  if (res.status === 402) {
+    // Library voices need a paid plan; premade voices work on the free plan.
+    throw new Error(`ElevenLabs 402 (voice ${voice} needs a paid plan, pick a premade voice): ${await res.text()}`)
+  }
   if (!res.ok) throw new Error(`ElevenLabs ${res.status}: ${await res.text()}`)
   writeFileSync(out, Buffer.from(await res.arrayBuffer()))
 }
 
-console.log(`[voiceover] ${id}: ${spec.beats.length} beats, engine=${engine}, voice=${voice}${engine === "elevenlabs" ? `, model=${model}` : ""}`)
-const clips: { file: string; start: number }[] = []
-let overruns = 0
-for (const [i, beat] of spec.beats.entries()) {
-  const file = join(workDir, `beat-${String(i + 1).padStart(2, "0")}.mp3`)
-  if (engine === "elevenlabs") await elevenClip(beat.text, file)
-  else {
-    try {
-      await edgeClip(beat.text, file)
-    } catch (err) {
-      console.error(`[voiceover] Edge TTS failed on beat ${i + 1} after 4 attempts: ${err instanceof Error ? err.message : err}`)
-      console.error("[voiceover] Edge TTS may be refusing the connection. Retry later, or set ELEVENLABS_API_KEY.")
-      process.exit(1)
+async function makeClips() {
+  console.log(`[voiceover] ${id}: ${spec.beats.length} beats, engine=${engine}, voice=${voice}${engine === "elevenlabs" ? `, model=${model}` : ""}`)
+  const clips: { file: string; start: number }[] = []
+  let overruns = 0
+  for (const [i, beat] of spec.beats.entries()) {
+    const file = join(workDir, `beat-${String(i + 1).padStart(2, "0")}.mp3`)
+    if (engine === "elevenlabs") await elevenClip(beat.text, file)
+    else {
+      try {
+        await edgeClip(beat.text, file)
+      } catch (err) {
+        throw new Error(`beat ${i + 1} after 4 attempts: ${err instanceof Error ? err.message : err}`)
+      }
     }
+    const len = probe(file)
+    const slotEnd = (spec.beats[i + 1]?.start ?? spec.duration) - gap
+    const slot = slotEnd - beat.start
+    const flag = len > slot ? "  OVERRUNS SLOT" : ""
+    if (len > slot) overruns++
+    console.log(`  beat ${i + 1}: ${beat.start.toFixed(1)}s -> ends ${(beat.start + len).toFixed(2)}s (clip ${len.toFixed(2)}s / slot ${slot.toFixed(2)}s)${flag}`)
+    clips.push({ file, start: beat.start })
   }
-  const len = probe(file)
-  const slotEnd = (spec.beats[i + 1]?.start ?? spec.duration) - gap
-  const slot = slotEnd - beat.start
-  const flag = len > slot ? "  OVERRUNS SLOT" : ""
-  if (len > slot) overruns++
-  console.log(`  beat ${i + 1}: ${beat.start.toFixed(1)}s -> ends ${(beat.start + len).toFixed(2)}s (clip ${len.toFixed(2)}s / slot ${slot.toFixed(2)}s)${flag}`)
-  clips.push({ file, start: beat.start })
+  return { clips, overruns }
 }
+
+let result: Awaited<ReturnType<typeof makeClips>>
+try {
+  result = await makeClips()
+} catch (err) {
+  if (engine !== "edge") throw err
+  console.error(`[voiceover] Edge TTS failed on ${err instanceof Error ? err.message : err}`)
+  if (forced || !hasKey) {
+    console.error("[voiceover] Edge TTS may be refusing the connection. Retry later, or set ELEVENLABS_API_KEY in .env.")
+    process.exit(1)
+  }
+  // Redo every beat so the whole video uses one voice.
+  console.error("[voiceover] Falling back to ElevenLabs for every beat.")
+  engine = "elevenlabs"
+  voice = voiceFor(engine)
+  result = await makeClips()
+}
+const { clips, overruns } = result
 
 // Place every clip at its start time, mix (no level normalisation), and trim to the video length.
 const inputs = clips.flatMap((c) => ["-i", c.file])
