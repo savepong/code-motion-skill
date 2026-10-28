@@ -1,10 +1,15 @@
-// Sound for the Manga Page tutorial. Times are copied from visuals.js. The picture runs on twos (12 drawings/s),
+// Sound for the Manga Page tutorial. Event times are page-local, as in visuals.js; page offsets come
+// from the shared table in timing.js. The picture runs on twos (12 drawings/s),
 // so an event at t0 first shows on the next 1/12 s frame: on(t0).
 ;(function () {
   window.VIDEOS.tutorial.score = (k0) => {
     // start every sound a quarter sample past the 48 kHz grid (Chrome spikes sources that land exactly on it)
     const sn = (t) => (Math.round(t * 48000) + 0.25) / 48000
-    let k = { ...k0, play: (n, t, o) => k0.play(n, sn(t), o), tone: (t, o) => k0.tone(sn(t), o), noise: (t, o) => k0.noise(sn(t), o) }
+    const base = { ...k0, play: (n, t, o) => k0.play(n, sn(t), o), tone: (t, o) => k0.tone(sn(t), o), noise: (t, o) => k0.noise(sn(t), o) }
+    // play the following sounds in a page's local time
+    let k
+    const page = ({ offset }) => { k = { ...base, play: (n, t, o) => base.play(n, t + offset, o), tone: (t, o) => base.tone(t + offset, o), noise: (t, o) => base.noise(t + offset, o) } }
+    const { T: PG } = window.TIMING.tutorial
     const D = window.VIDEOS.tutorial.duration
     const on = (t0) => (Math.floor(t0 * 12 + 1e-6) + 1) / 12
     const pan = (x) => Math.max(-1, Math.min(1, x / 640 - 1)) * 0.6
@@ -43,11 +48,11 @@
     k0.bed('room', 0, D, { gain: 0.3 })
 
     // ---- COVER: the takeaway page, held, then turned
-    flip(1.0)
-    // everything below was scored from the first story page; play it after the 1.5 s cover
-    { const C = 1.5, b = k; k = { ...b, play: (n, t, o) => b.play(n, t + C, o), tone: (t, o) => b.tone(t + C, o), noise: (t, o) => b.noise(t + C, o) } }
+    page(PG.cover)
+    flip(PG.cover.to)
 
     // ---- PAGE 1: the problem, then install
+    page(PG.page1)
     slam(on(0), 0.8, pan(300))
     k.play('pop', on(0.3), { f: 300, gain: 0.7, pan: pan(300) }) // question balloon
     k.noise(1.8, { dur: 0.5, color: 'brown', filter: 'bandpass', f: [[0, 250], [0.3, 500], [0.5, 280]], q: 0.6, gain: 0.15, a: 0.2, minor: true }) // shrinks to the header
@@ -61,9 +66,10 @@
     pinpon(on(5.05) + 0.05, pan(1060)) // installed ✓
     k.play('pop', on(5.5), { f: 340, gain: 0.45, pan: pan(900), minor: true }) // works with other agents
 
-    flip(6.4)
+    flip(PG.page1.to)
 
     // ---- PAGE 2: ask, pick a style, approve
+    page(PG.page2)
     slam(on(6.75), 0.8, pan(330))
     typed(7.0, 14, 0.05, pan(230))
     typed(7.75, 14, 0.06, pan(230))
@@ -81,9 +87,10 @@
     k.play('impact', on(12.3), { gain: 0.5, pan: pan(690) })
     pinpon(on(12.5), pan(1000))
 
-    flip(14.6)
+    flip(PG.page2.to)
 
     // ---- STUDIO PAGE: preview before rendering
+    page(PG.studio)
     slam(on(15.0), 0.8, pan(220))
     typed(15.35, 16, 0.04, pan(220))
     typed(16.05, 14, 0.03, pan(220))
@@ -93,12 +100,10 @@
     k.play('click', on(18.7), { gain: 0.6, pan: pan(1200) }) // release
     k.play('pop', on(17.0), { f: 320, gain: 0.55, pan: pan(840) })
 
-    flip(19.1)
-
-    // pages 3-4 were scored at their storyboard times; play them 4.5 s later
-    { const SH = 4.5, b = k; k = { ...b, play: (n, t, o) => b.play(n, t + SH, o), tone: (t, o) => b.tone(t + SH, o), noise: (t, o) => b.noise(t + SH, o) } }
+    flip(PG.studio.to)
 
     // ---- PAGE 3: render, get the MP4
+    page(PG.page3)
     slam(on(15.0), 0.8, pan(640))
     typed(15.35, 25, 0.035, pan(340))
     // グングン: the bar fills 16.3 -> 19.0
@@ -116,9 +121,10 @@
     k.noise(20.4, { dur: 0.2, color: 'pink', filter: 'bandpass', f: [[0, 500], [0.2, 1200]], q: 0.8, gain: 0.14, a: 0.06, pan: pan(340), minor: true })
     k.play('pop', on(20.6), { f: 340, gain: 0.6, pan: pan(640) })
 
-    flip(22.6)
+    flip(PG.page3.to)
 
     // ---- PAGE 4: takeaway
+    page(PG.page4)
     slam(on(23.0), 0.6, 0, true)
     k.play('stamp', on(23.45), { gain: 0.8 }) // /code-motion
     ;['C5', 'D5', 'E5', 'G5'].forEach((n, i) => {

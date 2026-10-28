@@ -10,12 +10,14 @@ current when written; use what the repo already pins if it has them.
   .gitignore
   scripts/render.ts          # bun run render <id>: WAV first, then MP4 (--audio: WAV only)
   scripts/stills.ts          # bun run stills <id> <t1> <t2>...: PNGs for storyboards and checks
+  scripts/inkbox.ts          # optional: ink bounding-box check on stills (see Checks)
   scripts/voiceover.ts       # optional: bun run voiceover <id>: narration.json -> public/<id>-voice.mp3
   src/index.ts               # registerRoot
   src/config.ts              # default size, fps, fonts, logo
   src/Root.tsx               # one video + one audio composition per id
   src/VideoCanvas.tsx        # draws visuals.js on a canvas each frame
   src/videos/index.ts        # imports every video's scripts
+  src/videos/<id>/timing.js  # shared timing table read by visuals.js and score.js
   src/videos/<id>/visuals.js # window.VIDEOS[id] = { draw, duration, width?, height?, fps?, voice? }
   src/videos/<id>/score.js   # window.VIDEOS[id].score = (k) => ...
   src/videos/<id>/narration.json # optional: voiceover text per beat
@@ -77,6 +79,11 @@ public/*.wav
 public/*.mp3
 node_modules/
 ```
+
+Some repos also gitignore `src/lib/` and `src/style/` (third-party style files copied from the
+prompt, as in `examples/tutorial`). Then a fresh clone cannot build until someone copies them in
+again from `prompts/<style>.md`: say so in the video app's README, and list that step under
+Re-render. If the style's licence allows it, committing them is simpler.
 
 `msedge-tts` and the `voiceover` script are only needed for narration; leave them out otherwise.
 
@@ -154,6 +161,47 @@ Adapt `SOUND.renderOffline` to the sound kit's real API if the style prompt name
   }
 })()
 ```
+
+## Shared timing table
+
+Keep every event time in one table that both scripts read, so a sound can never drift from its
+picture. Load it first in `src/videos/index.ts`.
+
+```js
+// src/videos/<id>/timing.js, imported before visuals.js and score.js
+;(function () {
+  const beats = [
+    { id: "cover", start: 0 },
+    { id: "problem", items: [0.4, 1.1, 1.8], dur: 3.5 },
+    { id: "demo", items: [0.3, 1.6], dur: 4 },
+    { id: "cta", items: [0.5], dur: 3 },
+  ]
+  // Each beat starts when the previous beat's last element has finished, not at a fixed offset.
+  let t = 0
+  for (const b of beats) {
+    b.start = t
+    b.at = (b.items || []).map((dt) => b.start + dt) // absolute event times
+    t = b.start + (b.dur || 2.5)
+  }
+  // Insert or lengthen a beat: shift everything after it by the same amount.
+  const shift = (fromId, dt) => {
+    let on = false
+    for (const b of beats) {
+      if (b.id === fromId) on = true
+      if (on) { b.start += dt; b.at = b.at.map((x) => x + dt) }
+    }
+  }
+  const T = Object.fromEntries(beats.map((b) => [b.id, b]))
+  window.TIMING = window.TIMING || {}
+  window.TIMING["<id>"] = { beats, T, shift, duration: t }
+})()
+```
+
+`visuals.js` sets `duration: window.TIMING["<id>"].duration` and draws from `T.demo.at[1]`;
+`score.js` plays the matching sound at the same `T.demo.at[1]`. With a scrolling camera (below),
+derive each scroll start from the previous beat's last element end, `T.prev.at.at(-1) + hold`, so
+inserting an element never leaves the camera moving early. Narration `start` values in
+`narration.json` are plain numbers: copy them from the table after any shift.
 
 ## src/VideoCanvas.tsx
 
@@ -285,6 +333,30 @@ page: draw it at 2× on an offscreen canvas, then clip each panel and stack the 
 in reading order, splitting very wide panels in two. Redraw title and summary pages natively.
 Render with `bun run render <id>-vertical`.
 
+### Native 9:16: one tall page with a scrolling camera
+
+Stacked panels look like a shrunk landscape video. For a portrait-first video, lay the content out
+as one tall page 1080 px wide (text at least 48 px, 64 px side margins, nothing important in the
+top 220 px or bottom 340 px where phone UI sits), and move a camera down it:
+
+```js
+const camY = (t) => {
+  // one stop per beat; scroll from stop to stop over `move` seconds, starting after the
+  // previous beat's last element (see Shared timing table)
+  let y = 0
+  for (const s of STOPS) {
+    if (t < s.at) break
+    y = s.from + (s.y - s.from) * ease(Math.min(1, (t - s.at) / s.move))
+  }
+  return y
+}
+ctx.save()
+ctx.translate(0, -camY(t))
+drawPage(ctx, t) // page coordinates; only draw what is inside [camY, camY + H]
+ctx.restore()
+drawFurniture(ctx, W, H, t) // fixed logo, progress bar, captions: screen coordinates
+```
+
 ## Frame rate
 
 `config.ts` FPS (30) is the default. Set `fps: 60` in a video's registration for smoother motion;
@@ -372,6 +444,84 @@ for (const t of times) {
 }
 ```
 
+### Stills without Chrome
+
+`renderStill` needs a browser. On a machine without the Chrome app (CI, a fresh container), open
+Remotion's own headless shell once and reuse it; this is also how to turn storyboard panels into
+PNGs when you cannot open the storyboard HTML in a browser (register the storyboard as a video and
+render one still per beat):
+
+```ts
+import { ensureBrowser, openBrowser } from "@remotion/renderer"
+
+await ensureBrowser() // downloads Chrome Headless Shell once if missing
+const puppeteerInstance = await openBrowser("chrome")
+// ...pass puppeteerInstance to every renderStill call in the loop above...
+await puppeteerInstance.close({ silent: false })
+```
+
+## Checks
+
+### Ink bounding box per still
+
+Finds the box around everything that is not background, ignoring fixed page furniture (logo,
+progress bar, captions), and fails if ink comes closer than the safe margin to an edge. Needs only
+`ffmpeg`/`ffprobe`.
+
+```ts
+// scripts/inkbox.ts
+// bun scripts/inkbox.ts <margin px> <png>... [--ignore x,y,w,h]...
+import { execFileSync } from "node:child_process"
+
+const args = process.argv.slice(2)
+const ignore: number[][] = []
+const files: string[] = []
+for (let i = 1; i < args.length; i++) {
+  if (args[i] === "--ignore") ignore.push(args[++i].split(",").map(Number))
+  else files.push(args[i])
+}
+const margin = Number(args[0])
+let bad = 0
+for (const f of files) {
+  const [W, H] = execFileSync("ffprobe", ["-v", "error", "-select_streams", "v", "-show_entries", "stream=width,height", "-of", "csv=p=0", f])
+    .toString().trim().split(",").map(Number)
+  const px = execFileSync("ffmpeg", ["-v", "error", "-i", f, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], { maxBuffer: 1 << 28 })
+  const bg = [px[0], px[1], px[2]] // top-left pixel is the background
+  let x0 = W, y0 = H, x1 = -1, y1 = -1
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      if (ignore.some(([ix, iy, iw, ih]) => x >= ix && x < ix + iw && y >= iy && y < iy + ih)) continue
+      const o = (y * W + x) * 3
+      if (Math.abs(px[o] - bg[0]) + Math.abs(px[o + 1] - bg[1]) + Math.abs(px[o + 2] - bg[2]) < 48) continue
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y
+    }
+  const ok = x1 < 0 || (x0 >= margin && y0 >= margin && x1 < W - margin && y1 < H - margin)
+  if (!ok) bad++
+  console.log(`${ok ? "ok  " : "FAIL"} ${f} ink ${x0},${y0} → ${x1},${y1} (${W}×${H})`)
+}
+process.exit(bad ? 1 : 0)
+```
+
+```bash
+bun run stills <id> 0 3 7 12 18 24
+bun scripts/inkbox.ts 64 out/<id>-*.png --ignore 0,1880,1080,40   # e.g. a progress bar
+```
+
+Textured or gradient backgrounds defeat the background guess: render a still with the content
+hidden and compare against that instead, or raise the threshold.
+
+### Audio levels and gaps
+
+```bash
+# Peak and mean of the final mix: max_volume should be between -6 and -1 dB (no clipping),
+# mean_volume roughly -20 to -14 dB.
+ffmpeg -v info -i out/<id>.mp4 -vn -af volumedetect -f null - 2>&1 | grep -E "max_volume|mean_volume"
+
+# Silent stretches longer than 1 s. Every one should be a planned pause; an unexpected one is a
+# sound the kit ignored or a voice clip that failed.
+ffmpeg -v info -i out/<id>.mp4 -vn -af silencedetect=noise=-50dB:d=1 -f null - 2>&1 | grep silence_
+```
+
 ## Remotion Studio
 
 `bun run studio` opens the Studio in the browser (http://localhost:3000): pick the video in the
@@ -391,6 +541,30 @@ const F = (size, s) => (THAI.test(s) ? `700 ${size}px "Mali"` : `400 ${size}px "
 
 Add those faces to `FONT_SPECS` and a sample of the script to `FONT_SAMPLE` so rendering waits for
 them.
+
+### Thai and other clustered scripts
+
+Never animate Thai, Devanagari, Khmer and similar scripts letter by letter: `"น้ำ".slice(0, 2)`
+cuts a vowel or tone mark from its base, so marks float, stack on the wrong letter or show as
+dotted circles. Draw the whole string every frame and reveal it with a clip:
+
+```js
+const reveal = (ctx, s, x, y, p) => {
+  // p: 0..1 reveal progress
+  const w = ctx.measureText(s).width
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(x - 4, y - 200, (w + 8) * p, 400) // tall enough for marks above and below
+  ctx.clip()
+  ctx.fillText(s, x, y)
+  ctx.restore()
+}
+```
+
+If you need per-unit steps (a typewriter sound per character), split into grapheme clusters with
+`[...new Intl.Segmenter("th", { granularity: "grapheme" }).segment(s)].map((g) => g.segment)` and
+still draw each prefix as one `fillText`. Leave extra line height (about 1.5×) for marks above and
+below the line.
 
 ## Self-hosting fonts
 

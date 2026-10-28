@@ -47,8 +47,10 @@ Only if there is no video app yet. Ask where it should live (default `apps/video
    key sounds, and the narration for that beat if there is a voiceover. Keep each beat's narration
    inside its time range (about 2.2 English words per second) and name the exact voice. Show it
    (artifact if your tools allow, else the file path) and wait for approval.
-5. **Build** `src/videos/<id>/visuals.js` and `score.js` as storyboarded, and register the id in
-   `src/videos/index.ts`. Sound event times must match visual event times exactly. For a
+5. **Build** `src/videos/<id>/timing.js`, `visuals.js` and `score.js` as storyboarded, and register
+   the id in `src/videos/index.ts`. Put every event time in the shared timing table (REFERENCE.md)
+   and read it from both scripts, so sound and picture times match exactly. For 9:16, decide
+   between stacked panels and a native tall page with a scrolling camera (REFERENCE.md). For a
    voiceover, write `narration.json` with one entry per beat and run `bun run voiceover <id>`
    (see REFERENCE.md); fix any beat it reports as overrunning before you go on.
 6. **Preview.** Run `bun run render <id> --audio`, then `bun run studio`, and tell the user they can
@@ -59,14 +61,18 @@ Only if there is no video app yet. Ask where it should live (default `apps/video
 
 ## Edit a video
 
-Change `visuals.js`. If any event time moves, move the matching sound in `score.js` by the same
-amount, and the matching `start` in `narration.json` if there is one (then run
-`bun run voiceover <id>` again). Run the checklist on the changed beats, then re-render.
+Change text and drawing in `visuals.js`. Change times only in `timing.js`: to insert or lengthen
+a beat, add it to the table and `shift("<next beat>", seconds)` everything after it, so `visuals.js`,
+`score.js` and any scroll stops move together. Never add fixed offsets in one script only. Copy the
+new beat starts into `narration.json` if there is one, then run `bun run voiceover <id>` again.
+Older videos without a table: move each changed sound in `score.js` by the same amount by hand.
+Run the checklist on the changed beats, then re-render.
 
 ## Re-render
 
 ```bash
 bun install
+# if src/lib/ or src/style/ are gitignored, copy them from prompts/<style>.md first
 bun run voiceover <id>   # only if the video has narration.json
 bun run render <id>      # writes public/<id>.wav, then out/<id>.mp4
 ```
@@ -76,13 +82,18 @@ sound but is not byte-identical (float rounding moves a few audio samples by 1 L
 
 ## Checklist before every render
 
-Render stills with `bun run stills <id> 0 <one time per beat> <last>` and look at each one:
+Render stills with `bun run stills <id> 0 <one time per beat> <last>` (no Chrome app? see
+"Stills without Chrome" in REFERENCE.md) and look at each one:
 
 - [ ] No text overflows its box or overlaps another label (the most common bug).
 - [ ] Frame 0 is a clean cover, not half-drawn objects.
 - [ ] Every font the video uses is in `public/fonts/fonts.css` and `FONT_SPECS`; otherwise it
       silently renders in a fallback font.
 - [ ] Non-Latin scripts render in the intended font: no tofu boxes, no clipped marks above or below.
+- [ ] Thai and other clustered scripts are drawn as whole strings and revealed with a clip, never
+      sliced letter by letter (floating or dotted-circle marks).
+- [ ] Ink stays inside the safe margin on every still, page furniture excluded:
+      `bun scripts/inkbox.ts 64 out/<id>-*.png --ignore x,y,w,h` exits 0 (REFERENCE.md, Checks).
 - [ ] The logo, if the brand has one, is the real file, not redrawn.
 - [ ] Every number is real or marked illustrative.
 - [ ] With a voiceover: `bun run voiceover <id>` exits 0 (no beat overruns), it used the voice the
@@ -91,6 +102,10 @@ Render stills with `bun run stills <id> 0 <one time per beat> <last>` and look a
       the narration), one without renders with `{}`. Say which mode was used.
 - [ ] Every sound the score asks for is supported by the sound kit in `src/lib/`; unsupported
       options are silently ignored, so listen to the WAV.
+- [ ] Mix levels: `ffmpeg -i out/<id>.mp4 -vn -af volumedetect -f null - 2>&1 | grep _volume`
+      shows `max_volume` between -6 and -1 dB.
+- [ ] No unplanned silence: `ffmpeg -i out/<id>.mp4 -vn -af silencedetect=noise=-50dB:d=1 -f null - 2>&1 | grep silence_`
+      lists only pauses the storyboard planned.
 
 ## Rules
 
@@ -98,5 +113,8 @@ Render stills with `bun run stills <id> 0 <one time per beat> <last>` and look a
 - Self-host fonts in `public/fonts/` so renders work offline and stay the same. If the style's
   fonts lack the video's script (Thai, Japanese…), add a matching font for that script only; see
   REFERENCE.md.
-- Keep `prompts/` verbatim: add it to `.prettierignore`.
+- Keep `prompts/` verbatim. If the project uses Prettier, add `prompts/` (and `src/lib/`) to
+  `.prettierignore`.
+- If `src/lib/` or `src/style/` are gitignored, a fresh clone cannot build: say so in the README
+  and in the Re-render steps.
 - Ask before installing packages. Never commit `out/`, `public/*.wav` or `public/*.mp3`.

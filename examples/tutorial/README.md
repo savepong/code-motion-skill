@@ -39,6 +39,7 @@ prompt first:
 
 | Path                                 | What                                                                 |
 | ------------------------------------ | -------------------------------------------------------------------- |
+| `src/videos/tutorial/timing.js`      | Page start times and page turns, read by both scripts |
 | `src/videos/tutorial/visuals.js`     | Five manga pages, page turns, and the 9:16 panel stacking            |
 | `src/videos/tutorial/score.js`       | Every sound, at the same times as the pictures                       |
 | `src/videos/tutorial/vertical.js`    | Registers `tutorial-vertical` with a 1080×1920 canvas                |
